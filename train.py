@@ -53,6 +53,35 @@ def cross_entropy(
     return -jnp.mean(pred_y)
 
 
+def accuracy(
+        y: Int[Array, "batch"],
+        pred_y: Float[Array, "batch 10"],
+) -> Float[Array, ""]:
+    pred_y = jnp.argmax(pred_y, axis=1)
+    return jnp.mean(y == pred_y)
+
+
+def evaluate(
+        model: CNN,
+        test_loader: torch.utils.data.DataLoader,
+):
+    avg_loss = 0.0
+    avg_acc = 0.0
+    n = 0
+    for (x_batch, y_batch) in test_loader:
+        x_batch = x_batch.numpy()
+        y_batch = y_batch.numpy()
+        n_batch = x_batch.shape[0]
+        avg_loss += n_batch*loss(model, x_batch, y_batch)
+        y_pred = jax.vmap(model)(x_batch)
+        avg_acc += n_batch*accuracy(y_batch, y_pred)
+        n += n_batch
+    avg_loss /= n
+    avg_acc /= n
+
+    return avg_loss, avg_acc
+
+
 def train(
         train_dataset: Dataset,
         validation_dataset: Dataset,
@@ -75,9 +104,13 @@ def train(
 
     model = CNN(key_model_init)
 
-    for epoch in tqdm(range(1, num_epochs+1)):
+    for epoch in range(1, num_epochs+1):
         for (x_batch, y_batch) in train_dataloader:
             loss_val, grad_val = eqx.filter_value_and_grad(loss)(model, x_batch.numpy(), y_batch.numpy())
+
+        test_loss, test_acc = evaluate(model, validation_dataloader)
+        print(f'Epoch {epoch:02d}:\tTest loss: {test_loss:.06f}\tTest acc: {test_acc:.2%}')
+
 
 
 def main():
