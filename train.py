@@ -1,11 +1,12 @@
 import jax
 import jax.numpy as jnp
-from jaxtyping import Float, Array
+from jaxtyping import Float, Int, Array
 import equinox as eqx
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torchvision
 
+from tqdm import tqdm
 from typing import Tuple, List
 
 
@@ -34,6 +35,24 @@ class CNN(eqx.Module):
         return x
 
 
+@eqx.filter_jit
+def loss(
+        model: CNN,
+        x: Float[Array, "batch 1 28 28"],
+        y: Int[Array, "batch"],
+) -> Float[Array, ""]:
+    pred_y = jax.vmap(model)(x)
+    return cross_entropy(y, pred_y)
+
+
+def cross_entropy(
+        y: Int[Array, "batch"],
+        pred_y: Float[Array, "batch 10"],
+) -> Float[Array, ""]:
+    pred_y = jnp.take_along_axis(pred_y, indices=jnp.expand_dims(y, axis=1), axis=1)
+    return -jnp.mean(pred_y)
+
+
 def train(
         train_dataset: Dataset,
         validation_dataset: Dataset,
@@ -50,11 +69,15 @@ def train(
     train_shuffle_generator = \
         torch.Generator().manual_seed(jax.random.choice(key_training_shuffle_seed, 10000, shape=()).item())
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size,
-                                                   num_workers=1, shuffle=True, generator=train_shuffle_generator)
+                                                   num_workers=0, shuffle=True, generator=train_shuffle_generator)
     validation_dataloader = torch.utils.data.DataLoader(validation_dataset, batch_size=batch_size,
-                                                        num_workers=1, shuffle=False)
+                                                        num_workers=0, shuffle=False)
 
     model = CNN(key_model_init)
+
+    for epoch in tqdm(range(1, num_epochs+1)):
+        for (x_batch, y_batch) in train_dataloader:
+            loss_val, grad_val = eqx.filter_value_and_grad(loss)(model, x_batch.numpy(), y_batch.numpy())
 
 
 def main():
