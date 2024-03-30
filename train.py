@@ -1,12 +1,13 @@
 import jax
 import jax.numpy as jnp
-from jaxtyping import Float, Int, Array
+from jaxtyping import Float, Int, Array, PyTree
 import equinox as eqx
+import optax
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torchvision
 
-from tqdm import tqdm
+from time import time
 from typing import Tuple, List
 
 
@@ -90,6 +91,7 @@ def train(
         # Hyperparameters
         num_epochs: int,
         batch_size: int,
+        learning_rate: float,
 ):
     key_master = jax.random.PRNGKey(seed)
     key_training_shuffle_seed, key_model_init = jax.random.split(key_master, 2)
@@ -103,13 +105,29 @@ def train(
                                                         num_workers=0, shuffle=False)
 
     model = CNN(key_model_init)
+    optimizer = optax.adam(learning_rate=learning_rate)
+    opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 
+    @eqx.filter_jit
+    def take_step(
+            model: CNN,
+            opt_state: PyTree,
+            x: Float[Array, "batch 1 28 28"],
+            y: Int[Array, "batch"],
+    ):
+        loss_val, grads = eqx.filter_value_and_grad(loss)(model, x, y)
+        updates, opt_state = optimizer.update(grads, opt_state, model)
+        model = eqx.apply_updates(model, updates)
+        return model, opt_state, loss_val
+
+    start_time_s = time()
     for epoch in range(1, num_epochs+1):
         for (x_batch, y_batch) in train_dataloader:
-            loss_val, grad_val = eqx.filter_value_and_grad(loss)(model, x_batch.numpy(), y_batch.numpy())
+            model, opt_state, loss_val = take_step(model, opt_state, x_batch.numpy(), y_batch.numpy())
 
         test_loss, test_acc = evaluate(model, validation_dataloader)
         print(f'Epoch {epoch:02d}:\tTest loss: {test_loss:.06f}\tTest acc: {test_acc:.2%}')
+    print(f'Took {time() - start_time_s:.2f}s')
 
 
 
@@ -132,6 +150,7 @@ def main():
         seed=123,
         num_epochs=3,
         batch_size=64,
+        learning_rate=1e-2,
     )
 
 
