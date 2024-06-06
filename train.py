@@ -5,28 +5,41 @@ import equinox as eqx
 import optax
 import torch
 from torch.utils.data import Dataset, DataLoader
-import torchvision
 
 from time import time
 from typing import Tuple, List
+
+import utils
 
 
 class CNN(eqx.Module):
     layers: List
 
-    def __init__(self, key):
+    def __init__(
+            self,
+            key,
+            num_conv_channels: int = 3,
+            hidden_layer_size: int = 512,
+    ):
+        n_x, n_y = 28, 28  # MNIST image sizes
+        conv_kernel_size = 4
+        pool_kernel_size = 2
+        conv_output_dim = (n_x - conv_kernel_size - pool_kernel_size + 2) * \
+                          (n_y - conv_kernel_size - pool_kernel_size + 2) * \
+                          num_conv_channels
+
         # Architecture from Equinox tutorial. Single convolutional layer than 3-layer MLP. Parameterize later.
         key1, key2, key3, key4 = jax.random.split(key, 4)
         self.layers = [
-            eqx.nn.Conv2d(1, 3, kernel_size=4, key=key1),
-            eqx.nn.MaxPool2d(kernel_size=2),
+            eqx.nn.Conv2d(1, num_conv_channels, kernel_size=conv_kernel_size, key=key1),
+            eqx.nn.MaxPool2d(kernel_size=pool_kernel_size),
             jax.nn.relu,
             jnp.ravel,
-            eqx.nn.Linear(1728, 512, key=key2),
+            eqx.nn.Linear(conv_output_dim, hidden_layer_size, key=key2),
             jax.nn.sigmoid,  # Curious choice.
-            eqx.nn.Linear(512, 64, key=key3),
+            eqx.nn.Linear(hidden_layer_size, hidden_layer_size, key=key3),
             jax.nn.relu,
-            eqx.nn.Linear(64, 10, key=key4),
+            eqx.nn.Linear(hidden_layer_size, 10, key=key4),
             jax.nn.log_softmax,
         ]
 
@@ -92,19 +105,18 @@ def train(
         num_epochs: int,
         batch_size: int,
         learning_rate: float,
+        model: CNN,
 ):
-    key_master = jax.random.PRNGKey(seed)
-    key_training_shuffle_seed, key_model_init = jax.random.split(key_master, 2)
+    key_training_shuffle_seed = jax.random.PRNGKey(seed)
 
     # Convert datasets into dataloaders
     train_shuffle_generator = \
         torch.Generator().manual_seed(jax.random.choice(key_training_shuffle_seed, 10000, shape=()).item())
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size,
-                                                   num_workers=0, shuffle=True, generator=train_shuffle_generator)
-    validation_dataloader = torch.utils.data.DataLoader(validation_dataset, batch_size=batch_size,
-                                                        num_workers=0, shuffle=False)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size,
+                                  num_workers=0, shuffle=True, generator=train_shuffle_generator)
+    validation_dataloader = DataLoader(validation_dataset, batch_size=batch_size,
+                                       num_workers=0, shuffle=False)
 
-    model = CNN(key_model_init)
     optimizer = optax.adam(learning_rate=learning_rate)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
 
@@ -128,25 +140,14 @@ def train(
         test_loss, test_acc = evaluate(model, validation_dataloader)
         print(f'Epoch {epoch:02d}:\tTest loss: {test_loss:.06f}\tTest acc: {test_acc:.2%}')
     print(f'Took {time() - start_time_s:.2f}s')
-
+    return test_acc
 
 
 def main():
-    # For now, just use MNIST dataset
-    transform = torchvision.transforms.Compose([
-        torchvision.transforms.ToTensor(),
-        torchvision.transforms.Normalize(mean=(0.5,), std=(0.5,))
-    ])
-    (train_dataset, test_dataset) = (torchvision.datasets.MNIST(
-        "MNIST",
-        train=t,
-        download=True,
-        transform=transform,
-    ) for t in (True, False))
+    train_dataset, validation_dataset, _ = utils.get_mnist_split()
 
-    # Split the training dataset into training and validation in a reproducible way.
-    [train_dataset, validation_dataset] = torch.utils.data.random_split(train_dataset, [0.7, 0.3],
-                                                                        generator=torch.Generator().manual_seed(1234))
+    key_model_init = jax.random.PRNGKey(42)
+    model = CNN(key_model_init)
 
     train(
         train_dataset=train_dataset,
@@ -155,6 +156,7 @@ def main():
         num_epochs=3,
         batch_size=64,
         learning_rate=1e-2,
+        model=model,
     )
 
 
