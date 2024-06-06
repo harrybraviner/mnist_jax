@@ -144,9 +144,13 @@ def main():
         transform=transform,
     ) for t in (True, False))
 
+    # Split the training dataset into training and validation in a reproducible way.
+    [train_dataset, validation_dataset] = torch.utils.data.random_split(train_dataset, [0.7, 0.3],
+                                                                        generator=torch.Generator().manual_seed(1234))
+
     train(
         train_dataset=train_dataset,
-        validation_dataset=test_dataset,  # FIXME - switch to using a proper validation dataset
+        validation_dataset=validation_dataset,
         seed=123,
         num_epochs=3,
         batch_size=64,
